@@ -22,10 +22,9 @@
   },
   "homepage": "https://github.com/listen1/listen1_desktop#readme",
   "dependencies": {
-    "@electron/remote": "^2.1.2",
-    "chardet": "^1.4.0",
-    "electron-store": "^8.0.1",
-    "electron-updater": "^5.0.1",
-    "music-metadata": "^7.12.3"
+    "chardet": "^2.0.0",
+    "electron-store": "^10.0.1",
+    "electron-updater": "^6.3.9",
+    "music-metadata": "^10.6.5"
   }
 }

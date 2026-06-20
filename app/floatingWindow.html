@@ -27,6 +27,14 @@
       body.unlocked-body:hover .content {
         background: rgba(36, 36, 36, 0.8);
       } */
+      span.contentTrans {
+        font-size: 18px;
+        opacity: 0.7;
+      }
+      span.contentNext {
+        font-size: 18px;
+        opacity: 0.5;
+      }
       body {
         font-family: "SF Pro Text", "SF Pro Icons", "Helvetica Neue",
           "Microsoft Yahei", "Helvetica", "Arial", sans-serif;
@@ -35,6 +43,7 @@
         padding: 0;
         width: 100%;
         height: 100%;
+        -webkit-app-region: drag;
       }
       .feather {
         height: 16px;
@@ -44,15 +53,26 @@
         display: inline-block;
         background-color: rgba(255,255,255,0.01);
       }
+      #toolbar-trigger {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 20px;
+        z-index: 10000;
+        -webkit-app-region: no-drag;
+      }
       #toolbar {
         user-select: none;
         position: fixed;
         top: 3px;
-        z-index: 9999;
+        z-index: 10001;
         margin: 0 auto;
         left: 0;
         right: 0;
         text-align: center;
+        -webkit-app-region: no-drag;
+        display: none;
       }
       .icon:hover,
       .icon:hover .feather {
@@ -124,7 +144,9 @@
     <div id="currentLyricAll" class="content lyric-content">
       <span id="currentLyric" class="contentOriginal">Listen1</span>
       <span id="currentLyricTrans" class="contentTrans"></span>
+      <span id="nextLyric" class="contentNext"></span>
     </div>
+    <div id="toolbar-trigger"></div>
     <div id="toolbar">
       <div class="locked">
         <svg class="feather icon window-action" id="lock-icon">
@@ -204,6 +226,16 @@
       currentLyricTrans = document.getElementById("currentLyricTrans");
       window.api.onTranslLyric((arg) => {
         currentLyricTrans.innerHTML = arg;
+        // 有翻译时隐藏下一行
+        if (arg) {
+          document.getElementById("nextLyric").style.display = "none";
+        }
+      });
+      nextLyric = document.getElementById("nextLyric");
+      window.api.onNextLyric((arg) => {
+        nextLyric.innerHTML = arg;
+        // 有下一行歌词时显示
+        nextLyric.style.display = arg ? "block" : "none";
       });
     </script>
     <script>
@@ -214,17 +246,17 @@
           document.getElementsByClassName("locked")[0].style.display = "block";
           document.getElementsByClassName("unlocked")[0].style.display = "none";
           document.querySelector("body").classList.remove("unlocked-body");
+          document.body.style.webkitAppRegion = "no-drag";
         } else {
           document.getElementsByClassName("locked")[0].style.display = "none";
           document.getElementsByClassName("unlocked")[0].style.display =
             "block";
           document.querySelector("body").classList.add("unlocked-body");
+          document.body.style.webkitAppRegion = "drag";
         }
       }
 
-      // enter lyric window zone, show/hide lock icon
-      document.getElementById("toolbar").style.display = "none";
-
+      // Toolbar show/hide on mouse enter/leave
       document.addEventListener("mouseenter", (event) => {
         document.getElementById("toolbar").style.display = "block";
       });
@@ -260,7 +292,19 @@
             function () {
               // toggle floating window lock/unlock status
               IS_WINDOW_LOCKED = !IS_WINDOW_LOCKED;
-              renderToolBar();
+      // Toolbar show/hide via trigger area at top
+      const toolbarEl = document.getElementById("toolbar");
+      const triggerEl = document.getElementById("toolbar-trigger");
+
+      triggerEl.addEventListener("mouseenter", () => {
+        toolbarEl.style.display = "block";
+      });
+
+      toolbarEl.addEventListener("mouseleave", () => {
+        toolbarEl.style.display = "none";
+      });
+
+      renderToolBar();
               const message = IS_WINDOW_LOCKED
                 ? "float_window_ignore_mouse_event"
                 : "float_window_accept_mouse_event";
@@ -279,40 +323,6 @@
           });
         }
       );
-      // drag can't use webkit-app-region becse mouse enter will not trigger
-      // we use custom handle, more details please read link below
-      // https://github.com/electron/electron/issues/1354#issuecomment-404348957
-      let animationId;
-      let mouseX;
-      let mouseY;
-
-      function onMouseDown(e) {
-        mouseX = e.clientX;
-        mouseY = e.clientY;
-
-        document.addEventListener("mouseup", onMouseUp);
-        requestAnimationFrame(this.moveWindow);
-      }
-
-      function onMouseUp(e) {
-        document.removeEventListener("mouseup", onMouseUp);
-        cancelAnimationFrame(animationId);
-      }
-
-      function moveWindow() {
-        window.api.send("floatWindowMoving", {
-          mouseX,
-          mouseY,
-        });
-        animationId = requestAnimationFrame(moveWindow);
-      }
-
-      document
-        .getElementById("currentLyricAll")
-        .addEventListener("mousedown", (event) => {
-          onMouseDown(event);
-        });
-
       renderToolBar();
     </script>
   </body>

@@ -2,6 +2,7 @@ const electron = require("electron");
 const {
   app,
   BrowserWindow,
+  dialog,
   globalShortcut,
   ipcMain,
   Menu,
@@ -9,12 +10,19 @@ const {
   screen,
   Tray,
 } = electron;
-const Store = require("electron-store");
 const { autoUpdater } = require("electron-updater");
-const remoteMain = require("@electron/remote/main");
 const { join } = require("path");
+const { readAudioTags } = require("./functions");
 
-const store = new Store();
+let Store;
+let store;
+
+async function initStore() {
+  const mod = await import("electron-store");
+  Store = mod.default;
+  store = new Store();
+}
+
 const iconPath = join(__dirname, "/listen1_chrome_extension/images/logo.png");
 
 autoUpdater.checkForUpdatesAndNotify();
@@ -50,14 +58,14 @@ switch (process.platform) {
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
 /** @type {{ width: number; height: number; maximized: boolean; zoomLevel: number}} */
-const windowState = store.get("windowState") || {
+let windowState = {
   width: 1000,
   height: 670,
   maximized: false,
   zoomLevel: 0,
 };
 /** @type {electron.Config} */
-let proxyConfig = store.get("proxyConfig") || {
+let proxyConfig = {
   mode: "system",
 };
 
@@ -220,7 +228,7 @@ function createFloatingWindow(cssStyle) {
       hasShadow: false,
       alwaysOnTop: true,
       webPreferences: {
-        sandbox: true,
+        contextIsolation: true,
         preload: join(__dirname, "preload.js"),
       },
       ...winBounds,
@@ -286,13 +294,22 @@ const setThumbbarPlay = () => {
 };
 
 function createWindow() {
+  // Load persisted state
+  const savedWindowState = store.get("windowState");
+  if (savedWindowState) {
+    Object.assign(windowState, savedWindowState);
+  }
+  const savedProxyConfig = store.get("proxyConfig");
+  if (savedProxyConfig) {
+    proxyConfig = savedProxyConfig;
+  }
+
   const filter = {
     urls: [
       "*://*.music.163.com/*",
       "*://music.163.com/*",
       "*://*.xiami.com/*",
-      "*://i.y.qq.com/*",
-      "*://c.y.qq.com/*",
+      "*://*.qq.com/*",
       "*://*.kugou.com/*",
       "*://*.kuwo.cn/*",
       "*://*.bilibili.com/*",
@@ -323,6 +340,33 @@ function createWindow() {
       callback({ cancel: false, requestHeaders: details.requestHeaders });
     }
   );
+
+  session.defaultSession.webRequest.onHeadersReceived(
+    filter,
+    (details, callback) => {
+      let responseHeaders = details.responseHeaders;
+      let cookies = responseHeaders['set-cookie'] || responseHeaders['Set-Cookie'];
+
+      if (cookies) {
+        const newCookies = cookies.map(cookie => {
+          let newCookie = cookie;
+          if (!newCookie.toLowerCase().includes('samesite')) {
+            newCookie += '; SameSite=None';
+          }
+          if (!newCookie.toLowerCase().includes('secure')) {
+            newCookie += '; Secure';
+          }
+          return newCookie;
+        });
+
+        if (responseHeaders['set-cookie']) responseHeaders['set-cookie'] = newCookies;
+        if (responseHeaders['Set-Cookie']) responseHeaders['Set-Cookie'] = newCookies;
+      }
+
+      callback({ cancel: false, responseHeaders: responseHeaders });
+    }
+  );
+
   // Create the browser window.
   mainWindow = new BrowserWindow({
     width: windowState.width,
@@ -331,7 +375,6 @@ function createWindow() {
     minWidth: 600,
     webPreferences: {
       nodeIntegration: true,
-      enableRemoteModule: true,
       contextIsolation: false,
     },
     icon: iconPath,
@@ -490,10 +533,12 @@ function hack_referer_header(details) {
   let ua_value = "";
 
   if (details.url.includes("://music.163.com/")) {
-    referer_value = "http://music.163.com/";
+    referer_value = "https://music.163.com/";
+    origin_value = "https://music.163.com";
   }
   if (details.url.includes("://interface3.music.163.com/")) {
-    referer_value = "http://music.163.com/";
+    referer_value = "https://music.163.com/";
+    origin_value = "https://music.163.com";
   }
   if (details.url.includes("://gist.githubusercontent.com/")) {
     referer_value = "https://gist.githubusercontent.com/";
@@ -518,7 +563,7 @@ function hack_referer_header(details) {
     details.url.includes("music.qq.com/") ||
     details.url.includes("imgcache.qq.com/")
   ) {
-    referer_value = "http://y.qq.com/";
+    referer_value = "https://y.qq.com/";
   }
   if (details.url.includes(".kugou.com/")) {
     referer_value = "https://www.kugou.com/";
@@ -528,7 +573,7 @@ function hack_referer_header(details) {
     ua_value = MOBILE_UA;
   }
   if (details.url.includes(".kuwo.cn/")) {
-    referer_value = "http://www.kuwo.cn/";
+    referer_value = "https://www.kuwo.cn/";
   }
   if (
     details.url.includes(".bilibili.com/") ||
@@ -597,9 +642,11 @@ ipcMain.on("currentLyric", (event, arg) => {
     if (typeof arg === "string") {
       floatingWindow.webContents.send("currentLyric", arg);
       floatingWindow.webContents.send("currentLyricTrans", "");
+      floatingWindow.webContents.send("nextLyric", "");
     } else {
       floatingWindow.webContents.send("currentLyric", arg.lyric);
-      floatingWindow.webContents.send("currentLyricTrans", arg.tlyric);
+      floatingWindow.webContents.send("currentLyricTrans", arg.tlyric || "");
+      floatingWindow.webContents.send("nextLyric", arg.nextLyric || "");
     }
   }
 });
@@ -701,6 +748,43 @@ ipcMain.on("openUrl", (event, arg, params) => {
   bWindow.setMenu(null);
 });
 
+ipcMain.handle("cookie-get", async (event, cookieRequest) => {
+  const cookieArray = await session.defaultSession.cookies.get(cookieRequest);
+  return cookieArray.length > 0 ? cookieArray[0] : null;
+});
+
+ipcMain.handle("cookie-set", async (event, cookie) => {
+  await session.defaultSession.cookies.set(cookie);
+  return true;
+});
+
+ipcMain.handle("cookie-remove", async (event, cookie) => {
+  await session.defaultSession.cookies.remove(cookie.url, cookie.name);
+  return true;
+});
+
+ipcMain.handle("open-auth-window", async (event, url) => {
+  const authWindow = new BrowserWindow({
+    width: 1000,
+    height: 670,
+    webPreferences: {
+      sandbox: true,
+    },
+  });
+  authWindow.loadURL(url);
+  return true;
+});
+
+ipcMain.handle("show-open-dialog", async (event, options) => {
+  const result = await dialog.showOpenDialog(mainWindow, options);
+  return result;
+});
+
+ipcMain.handle("read-audio-tags", async (event, filePath) => {
+  const metadata = await readAudioTags(filePath);
+  return metadata;
+});
+
 ipcMain.on("floatWindowMoving", (e, { mouseX, mouseY }) => {
   const { x, y } = screen.getCursorScreenPoint();
   floatingWindow?.setPosition(x - mouseX, y - mouseY);
@@ -723,10 +807,9 @@ if (!gotTheLock) {
   });
 
   // Create myWindow, load the rest of the app, etc...
-  app.on("ready", () => {
+  app.on("ready", async () => {
+    await initStore();
     createWindow();
-    remoteMain.initialize();
-    remoteMain.enable(mainWindow.webContents);
   });
 }
 
